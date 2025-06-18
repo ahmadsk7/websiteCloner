@@ -2,18 +2,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.clone import router as clone_router
 
-app = FastAPI(title="Website Cloner API")
+app = FastAPI()
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=["*"],  # Allow all origins in development
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],  # Explicitly allow GET, POST, and OPTIONS
     allow_headers=["*"],
 )
 
-app.include_router(clone_router)
+# Include routers
+app.include_router(clone_router, prefix="/api")
 
 @app.get("/health")
 async def health_check():
