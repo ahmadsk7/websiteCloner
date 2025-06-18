@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import time
 from urllib.parse import urljoin
 import requests
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -14,6 +15,55 @@ class Scraper:
     def __init__(self):
         self.timeout = 30000  # 30 seconds timeout for browser operations
         
+    async def extract_comprehensive_background(self, page, base_url):
+        selectors = [
+            "body", "html", "main", "#__next", "#root", ".main-wrapper", ".container", "div"
+        ]
+        backgrounds = []
+        for selector in selectors:
+            bg = await page.evaluate(f'''
+            () => {{
+                const el = document.querySelector("{selector}");
+                if (!el) return null;
+                const style = window.getComputedStyle(el);
+                const bg = style.background;
+                const bgImg = style.backgroundImage;
+                if (bg && bg !== 'none' && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent')
+                    return {{selector: "{selector}", style: `background: ${{bg}} !important;`}};
+                if (bgImg && bgImg !== 'none')
+                    return {{selector: "{selector}", style: `background-image: ${{bgImg}} !important;`}};
+                return null;
+            }}
+            ''')
+            if bg:
+                backgrounds.append(bg)
+        return backgrounds
+
+    def fix_css_urls(self, css, base_url):
+        def replacer(match):
+            orig_url = match.group(1).strip(' "\'')
+            if orig_url.startswith(('http://', 'https://', 'data:')):
+                return f"url({orig_url})"
+            return f"url({urljoin(base_url, orig_url)})"
+        return re.sub(r'url\(([^)]+)\)', replacer, css)
+
+    def debug_css_urls(self, css, base_url):
+        urls = re.findall(r'url\([^)]+\)', css)
+        logger.info(f"Found CSS URLs: {urls}")
+        return self.fix_css_urls(css, base_url)
+
+    def apply_backgrounds_to_soup(self, soup, backgrounds):
+        for bg in backgrounds:
+            selector = bg['selector']
+            style = bg['style']
+            el = soup.select_one(selector)
+            if el:
+                old_style = el.get('style', '')
+                if old_style and not old_style.strip().endswith(';'):
+                    old_style += ';'
+                el['style'] = old_style + style
+        return soup
+
     async def scrape(self, url: str) -> Dict[str, Any]:
         """
         Scrape a website using Playwright to handle modern websites and JavaScript.
@@ -67,7 +117,7 @@ class Scraper:
                 logger.info("Parsing HTML...")
                 soup = BeautifulSoup(content, 'html.parser')
                 
-                # Inline external CSS
+                # Inline external CSS (with url fix)
                 def inline_css(soup, base_url):
                     for link in soup.find_all('link', rel='stylesheet'):
                         href = link.get('href')
@@ -75,6 +125,7 @@ class Scraper:
                             css_url = href if href.startswith('http') else urljoin(base_url, href)
                             try:
                                 css_content = requests.get(css_url, timeout=5).text
+                                css_content = self.debug_css_urls(css_content, base_url)
                                 style_tag = soup.new_tag('style')
                                 style_tag.string = css_content
                                 link.replace_with(style_tag)
@@ -82,8 +133,33 @@ class Scraper:
                                 logger.error(f"Failed to fetch CSS from {css_url}: {e}")
                     return soup
 
+                # Fix image src attributes to be absolute URLs
+                def fix_image_srcs(soup, base_url):
+                    for img in soup.find_all('img'):
+                        src = img.get('src')
+                        if src and not src.startswith(('http://', 'https://', 'data:')):
+                            img['src'] = urljoin(base_url, src)
+                    return soup
+
                 soup = inline_css(soup, url)
+                soup = fix_image_srcs(soup, url)
+
+                backgrounds = await self.extract_comprehensive_background(page, url)
+                logger.info(f"Detected backgrounds: {backgrounds}")
+                # Fix url(...) in background styles
+                for bg in backgrounds:
+                    bg['style'] = self.fix_css_urls(bg['style'], url)
+                soup = self.apply_backgrounds_to_soup(soup, backgrounds)
                 content = str(soup)
+                
+                # Pick the most relevant background style for the frontend
+                background_style = ''
+                for bg in backgrounds:
+                    if bg['selector'] == 'body':
+                        background_style = bg['style']
+                        break
+                if not background_style and backgrounds:
+                    background_style = backgrounds[0]['style']
                 
                 # Extract basic information
                 title = soup.title.string if soup.title else ''
@@ -134,7 +210,7 @@ class Scraper:
                     'meta': {
                         'description': description
                     },
-                    'styles': styles,
+                    'styles': {**styles, 'background': background_style},
                     'assets': {
                         'images': images
                     }

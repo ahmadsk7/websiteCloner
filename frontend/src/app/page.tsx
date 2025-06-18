@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import axios from 'axios'
 import InputBox from '@/components/InputBox'
 
@@ -83,6 +83,35 @@ export default function Home() {
     }
   }
 
+  const patchBackgroundStyle = (html: string, backgroundStyle: string) => {
+    // Add a <style> tag at the top of the HTML to force the background
+    const styleTag = `<style>body, html { ${backgroundStyle} !important; }</style>`;
+    return styleTag + html;
+  };
+
+  // Helper to extract just the background property value
+  const extractBackgroundValue = (backgroundStyle: string) => {
+    const match = backgroundStyle.match(/background:\s*([^!;]+)[!;]?/);
+    return match ? match[1].trim() : '';
+  };
+
+  useEffect(() => {
+    if (cloneResult) {
+      // Try to extract the background image URL from the detected background style
+      const bgStyle = cloneResult.design_context.styles?.background || '';
+      const urlMatch = bgStyle.match(/url\(["']?(.*?)["']?\)/);
+      if (urlMatch && urlMatch[1]) {
+        const imgUrl = urlMatch[1];
+        const img = new window.Image();
+        img.onload = () => console.log(`✅ Background image loaded: ${imgUrl}`);
+        img.onerror = () => console.log(`❌ Background image failed to load: ${imgUrl}`);
+        img.src = imgUrl;
+      } else {
+        console.log('No background image URL detected in style:', bgStyle);
+      }
+    }
+  }, [cloneResult]);
+
   return (
     <main className="min-h-screen bg-gradient-to-b from-white to-gray-50">
       <div className="max-w-4xl mx-auto px-4 py-16">
@@ -115,7 +144,11 @@ export default function Home() {
                   <h3 className="text-lg font-medium">Title: {cloneResult.design_context.title}</h3>
                   <p className="text-gray-600">Description: {cloneResult.design_context.meta.description}</p>
                 </div>
-                <div dangerouslySetInnerHTML={{ __html: cloneResult.html }} />
+                {/* Apply background style to the container */}
+                <div
+                  style={{ background: extractBackgroundValue(cloneResult.design_context.styles?.background || '') }}
+                  dangerouslySetInnerHTML={{ __html: patchBackgroundStyle(cloneResult.html, cloneResult.design_context.styles?.background || '') }}
+                />
               </div>
             </div>
           )}
